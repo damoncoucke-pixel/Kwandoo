@@ -1,0 +1,9 @@
+# Kwandoo Kennisbank — Updates door Kevin Samyn
+# Voeg nieuwe procedures, problemen en oplossingen toe onderaan dit bestand.
+# Elk blok begint met een datum. Gebruik de structuur hieronder als voorbeeld.
+# Na het opslaan is de website automatisch bijgewerkt binnen 1-2 minuten.
+
+--- Update 2026-05-28 ---
+Onderwerp: Voorbeeldupdate — verwijder of vervang dit blok
+Probleem: Dit is een voorbeeld van hoe een update eruit ziet. Beschrijf hier het probleem of de context.
+Oplossing: Beschrijf hier stap voor stap de oplossing of de nieuwe afspraak. Je kan ook 🔴, ⚠️ of ✅ symbolen gebruiken om belangrijke punten te markeren.

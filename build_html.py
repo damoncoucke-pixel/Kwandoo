@@ -1,6 +1,12 @@
 #!/usr/bin/env python3
-"""Build Kwandoo_Kennisbank_v2.html — single self-contained HTML file."""
+"""Build Kwandoo_Kennisbank_v2.html (production, no chatbot) and
+Kwandoo_Kennisbank_v2_DEMO.html (demo, with chatbot + API key modal).
+
+Both versions share the same styling, content rendering and updates loader.
+The differences are gated by simple {{IF_DEMO}} ... {{/IF_DEMO}} blocks below.
+"""
 import json
+import re
 from pathlib import Path
 
 data = json.loads(Path("modules.json").read_text(encoding="utf-8"))
@@ -28,12 +34,13 @@ Bekende valkuilen — vermeld altijd als relevant:
 {KNOWLEDGE}
 [/KENNISBANK]"""
 
-HTML = r"""<!DOCTYPE html>
+
+TEMPLATE = r"""<!DOCTYPE html>
 <html lang="nl">
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>Kwandoo Kennisbank — Gemeente Ingelmunster</title>
+<title>Kwandoo Kennisbank — Gemeente Ingelmunster{{IF_DEMO}} (Demo){{/IF_DEMO}}</title>
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=Nunito:wght@400;600;700;800;900&display=swap" rel="stylesheet">
@@ -106,13 +113,14 @@ body {
   color: #5f6368; padding: 4px 8px;
 }
 
-.add-kb-btn {
+.add-kb-btn, .gear-btn {
   height: 38px; padding: 0 14px; background: rgba(255,255,255,0.15);
   border: 1px solid rgba(255,255,255,0.3); color: #fff; border-radius: 8px;
   cursor: pointer; font-family: inherit; font-weight: 700; font-size: 13px;
   white-space: nowrap; transition: background .15s;
 }
-.add-kb-btn:hover { background: rgba(255,255,255,0.28); }
+.gear-btn { width: 38px; padding: 0; font-size: 16px; }
+.add-kb-btn:hover, .gear-btn:hover { background: rgba(255,255,255,0.28); }
 
 /* ===== Layout ===== */
 .layout {
@@ -219,6 +227,11 @@ body {
 .section-body {
   padding: 6px 18px 16px;
   border-top: 1px solid #E8EAED;
+}
+
+.empty-updates {
+  background: #FFF8E1; border: 1px solid #FFE082; color: #8D6E00;
+  border-radius: 10px; padding: 14px 16px; font-size: 13.5px;
 }
 
 /* Special blocks */
@@ -386,7 +399,7 @@ mark.hl { background: #fff2a8; padding: 0 2px; border-radius: 2px; }
 }
 .send-btn:disabled { opacity: 0.55; cursor: not-allowed; }
 
-/* ===== Modal (kennisbank uitbreiden) ===== */
+/* ===== Modal (kennisbank uitbreiden / API instellingen) ===== */
 .modal-backdrop {
   position: fixed; inset: 0; background: rgba(0,0,0,0.42);
   z-index: 70; display: none;
@@ -400,13 +413,14 @@ mark.hl { background: #fff2a8; padding: 0 2px; border-radius: 2px; }
 }
 .modal h2 { margin: 0 0 4px; font-size: 19px; color: #1A237E; }
 .modal .desc { color: #5f6368; font-size: 13px; margin-bottom: 14px; }
-.modal textarea {
-  width: 100%; min-height: 180px;
+.modal textarea, .modal input[type=password] {
+  width: 100%; min-height: 44px;
   border: 1px solid #E8EAED; border-radius: 10px;
   padding: 12px; font-family: inherit; font-size: 13.5px;
   resize: vertical; outline: none; background: #FAFBFC;
 }
-.modal textarea:focus { border-color: #2D6A4F; }
+.modal textarea { min-height: 180px; }
+.modal textarea:focus, .modal input[type=password]:focus { border-color: #2D6A4F; }
 .modal-actions {
   display: flex; gap: 10px; margin-top: 14px; flex-wrap: wrap;
 }
@@ -430,6 +444,12 @@ mark.hl { background: #fff2a8; padding: 0 2px; border-radius: 2px; }
   margin-left: auto; font-size: 12px; color: #5f6368; align-self: center;
   font-weight: 600;
 }
+.api-status {
+  margin-top: 12px; font-size: 13px; font-weight: 700; padding: 8px 12px;
+  border-radius: 8px;
+}
+.api-status.ok { background: #E8F5E9; color: #1B5E20; }
+.api-status.no { background: #FFEBEE; color: #C62828; }
 
 @media (max-width: 720px) {
   .sidebar { position: fixed; top: 64px; bottom: 0; left: 0; z-index: 40; }
@@ -448,7 +468,7 @@ mark.hl { background: #fff2a8; padding: 0 2px; border-radius: 2px; }
   <div class="brand">
     <div class="brand-logo">4i</div>
     <div class="brand-text">
-      <div class="title">Kwandoo Kennisbank</div>
+      <div class="title">Kwandoo Kennisbank{{IF_DEMO}} <span style="opacity:.7;font-weight:600">(Demo)</span>{{/IF_DEMO}}</div>
       <div class="subtitle">Dienst Vrije Tijd — Gemeente Ingelmunster</div>
     </div>
   </div>
@@ -457,7 +477,8 @@ mark.hl { background: #fff2a8; padding: 0 2px; border-radius: 2px; }
     <input id="searchInput" class="search-input" type="text" placeholder="Zoek in de kennisbank…" autocomplete="off">
     <button id="searchClear" class="search-clear" style="display:none">×</button>
   </div>
-  <button class="add-kb-btn" id="openModalBtn">＋ Kennisbank</button>
+  {{IF_DEMO}}<button class="add-kb-btn" id="openModalBtn">＋ Kennisbank</button>
+  <button class="gear-btn" id="openApiModalBtn" aria-label="API Instellingen" title="API Instellingen">⚙️</button>{{/IF_DEMO}}
 </header>
 
 <div class="layout">
@@ -472,6 +493,7 @@ mark.hl { background: #fff2a8; padding: 0 2px; border-radius: 2px; }
   </main>
 </div>
 
+{{IF_DEMO}}
 <button class="fab" id="fab" aria-label="Open Kwandoo Assistent">💬</button>
 
 <section class="chat-panel" id="chatPanel" aria-label="Kwandoo Assistent">
@@ -505,11 +527,29 @@ mark.hl { background: #fff2a8; padding: 0 2px; border-radius: 2px; }
   </div>
 </div>
 
+<div class="modal-backdrop" id="apiModalBackdrop">
+  <div class="modal" role="dialog" aria-modal="true">
+    <h2>API Instellingen</h2>
+    <p class="desc">Voer je Anthropic API-key in om de chatbot te activeren. De key wordt lokaal opgeslagen in je browser en nergens naartoe verstuurd.</p>
+    <input id="apiKeyInput" type="password" placeholder="sk-ant-..." autocomplete="off">
+    <div class="api-status no" id="apiStatus">❌ Geen API key ingesteld</div>
+    <div class="modal-actions">
+      <button class="btn-primary" id="saveApiBtn">Opslaan</button>
+      <button class="btn-secondary" id="closeApiModalBtn">Sluiten</button>
+      <button class="btn-danger" id="clearApiBtn">Verwijder key</button>
+    </div>
+  </div>
+</div>
+{{/IF_DEMO}}
+
 <script>
 "use strict";
 const MODULES = __MODULES_JSON__;
+const IS_DEMO = __IS_DEMO__;
+{{IF_DEMO}}
 const SUPPLEMENTARY = __SUPPLEMENTARY_JSON__;
 const SYSTEM_PROMPT_TEMPLATE = __SYSTEM_PROMPT__;
+{{/IF_DEMO}}
 
 // ===== State =====
 const state = {
@@ -519,7 +559,12 @@ const state = {
   searchQuery: "",
   conversation: [],
   loading: false,
+  updatesLoaded: false,
+  updatesError: null,
+  updatesRawText: "",
 };
+
+let updatesModule = null;
 
 // ===== Utils =====
 function $(sel) { return document.querySelector(sel); }
@@ -544,17 +589,19 @@ function el(tag, attrs, ...children) {
 function escHtml(s) {
   return String(s).replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
 }
-function escAttr(s) { return escHtml(s).replace(/"/g, "&quot;"); }
 function highlight(text, query) {
   if (!query || query.length < 2) return escHtml(text);
   const re = new RegExp("(" + query.replace(/[-/\\^$*+?.()|[\]{}]/g, "\\$&") + ")", "gi");
   return escHtml(text).replace(re, '<mark class="hl">$1</mark>');
 }
-function getModule(id) { return MODULES.find(m => m.id === id) || MODULES[0]; }
+function allModules() {
+  return updatesModule ? MODULES.concat([updatesModule]) : MODULES;
+}
+function getModule(id) { return allModules().find(m => m.id === id) || MODULES[0]; }
 
 // ===== Content rendering =====
 // Renders a section's content as HTML, handling 🔴 ⚠️ ✅ blocks, numbered steps,
-// bullet points, blank-line spacers and simple table detection.
+// bullet points and blank-line spacers.
 function renderContent(text) {
   if (!text) return "";
   const lines = text.split(/\r?\n/);
@@ -568,7 +615,6 @@ function renderContent(text) {
       i++;
       continue;
     }
-    // Special blocks
     if (line.startsWith("🔴")) {
       out.push('<div class="note red">' + escHtml(line.replace(/^🔴\s*/, "🔴 ")) + "</div>");
       i++; continue;
@@ -581,22 +627,18 @@ function renderContent(text) {
       out.push('<div class="note green">' + escHtml(line.replace(/^✅\s*/, "✅ ")) + "</div>");
       i++; continue;
     }
-    // Numbered steps
     if (/^\d+\.\s/.test(line) && line.length < 250) {
       out.push('<div class="step">' + escHtml(line) + "</div>");
       i++; continue;
     }
-    // Bullets
     if (/^[•\-\*]\s/.test(line)) {
       out.push('<div class="bullet">' + escHtml(line.replace(/^[•\-\*]\s+/, "")) + "</div>");
       i++; continue;
     }
-    // Sub-heading like "2.1 Stap voor stap"
     if (/^\d+\.\d+\b/.test(line) && line.length < 100) {
       out.push('<div class="para" style="font-weight:800;color:#1A237E;margin-top:10px">' + escHtml(line) + "</div>");
       i++; continue;
     }
-    // Plain paragraph
     out.push('<div class="para">' + escHtml(line) + "</div>");
     i++;
   }
@@ -607,7 +649,7 @@ function renderContent(text) {
 function renderSidebar() {
   const nav = $("#modList");
   nav.innerHTML = "";
-  for (const m of MODULES) {
+  for (const m of allModules()) {
     const isActive = m.id === state.activeModuleId;
     const item = el("div", { class: "mod-item" + (isActive ? " active" : ""), onclick: () => selectModule(m.id) },
       el("span", { class: "mod-icon" }, m.icon),
@@ -672,7 +714,18 @@ function renderMain() {
   );
   root.appendChild(head);
 
-  // Quick chips
+  // Notice when updates module is shown but no content loaded
+  if (mod.id === "updates" && (!mod.sections || mod.sections.length === 0)) {
+    const note = el("div", { class: "empty-updates" });
+    if (state.updatesError) {
+      note.textContent = "Updates laden enkel via de webversie. Open de website via de GitHub Pages URL.";
+    } else {
+      note.textContent = "Nog geen updates beschikbaar. Updates verschijnen hier zodra het bestand 'kennisbank-updates.txt' op de server staat.";
+    }
+    root.appendChild(note);
+    return;
+  }
+
   const chips = el("div", { class: "quick-chips" });
   for (const s of mod.sections) {
     chips.appendChild(el("div", {
@@ -700,16 +753,15 @@ function renderMain() {
 }
 
 // ===== Search =====
-function buildSearchIndex() {
-  const idx = [];
-  for (const m of MODULES) {
+let SEARCH_INDEX = [];
+function rebuildSearchIndex() {
+  SEARCH_INDEX = [];
+  for (const m of allModules()) {
     for (const s of m.sections) {
-      idx.push({ module: m, section: s, hay: (s.title + "\n" + s.content).toLowerCase() });
+      SEARCH_INDEX.push({ module: m, section: s, hay: (s.title + "\n" + s.content).toLowerCase() });
     }
   }
-  return idx;
 }
-const SEARCH_INDEX = buildSearchIndex();
 
 function renderSearchResults(root) {
   const q = state.searchQuery.toLowerCase();
@@ -722,7 +774,6 @@ function renderSearchResults(root) {
     return;
   }
   for (const it of matches) {
-    // Build preview around the first match position
     const lower = it.section.content.toLowerCase();
     let pos = lower.indexOf(q);
     if (pos < 0) pos = 0;
@@ -745,9 +796,70 @@ function renderSearchResults(root) {
   }
 }
 
+// ===== Updates loader =====
+function parseUpdates(text) {
+  // Strip lines starting with '#' (comments) at the top, then split on '--- Update '
+  const stripped = text.split(/\r?\n/).filter(l => !/^\s*#/.test(l)).join("\n");
+  const parts = stripped.split(/^---\s*Update\s+/m).map(s => s.trim()).filter(Boolean);
+  const sections = [];
+  parts.forEach((part, i) => {
+    const lines = part.split(/\r?\n/);
+    const header = (lines.shift() || "").replace(/-+\s*$/, "").trim();
+    const body = lines.join("\n").trim();
+    if (!header && !body) return;
+    const subjMatch = body.match(/^Onderwerp:\s*(.+)$/m);
+    const subject = subjMatch ? subjMatch[1].trim() : "";
+    sections.push({
+      id: "update-" + (i + 1),
+      title: subject ? ("Update " + header + " — " + subject) : ("Update " + header),
+      content: body,
+    });
+  });
+  return sections;
+}
+
+function loadUpdates() {
+  fetch("./kennisbank-updates.txt", { cache: "no-cache" })
+    .then(r => {
+      if (!r.ok) throw new Error("HTTP " + r.status);
+      return r.text();
+    })
+    .then(text => {
+      state.updatesRawText = text;
+      state.updatesLoaded = true;
+      const sections = parseUpdates(text);
+      updatesModule = {
+        id: "updates",
+        title: "Updates & Nieuws",
+        icon: "📝",
+        description: "Nieuwste procedures, problemen en oplossingen — bijgewerkt door de dienst.",
+        sections: sections,
+      };
+      rebuildSearchIndex();
+      renderSidebar();
+      if (state.activeModuleId === "updates") renderMain();
+    })
+    .catch(err => {
+      state.updatesError = err && err.message ? err.message : "fetch failed";
+      // Still show the Updates module with a friendly empty-state note
+      updatesModule = {
+        id: "updates",
+        title: "Updates & Nieuws",
+        icon: "📝",
+        description: "Nieuwste procedures, problemen en oplossingen — bijgewerkt door de dienst.",
+        sections: [],
+      };
+      rebuildSearchIndex();
+      renderSidebar();
+      if (state.activeModuleId === "updates") renderMain();
+    });
+}
+
+{{IF_DEMO}}
 // ===== Chat =====
 const CONV_KEY = "kwandoo-chatbot-logs";
 const KB_KEY = "kwandoo-extra-knowledge";
+const API_KEY_KEY = "kwandoo-api-key";
 const MAX_CONVS = 100;
 let currentConvId = null;
 
@@ -773,6 +885,9 @@ function persistCurrentConversation() {
 
 function getExtraKnowledge() { return localStorage.getItem(KB_KEY) || ""; }
 function setExtraKnowledge(v) { localStorage.setItem(KB_KEY, v); }
+function getApiKey() { return (localStorage.getItem(API_KEY_KEY) || "").trim(); }
+function setApiKey(v) { localStorage.setItem(API_KEY_KEY, v); }
+function clearApiKey() { localStorage.removeItem(API_KEY_KEY); }
 
 function buildKnowledgeBase(extra) {
   const parts = [];
@@ -783,6 +898,9 @@ function buildKnowledgeBase(extra) {
     }
   }
   if (SUPPLEMENTARY) parts.push("\n\n[BIJKOMENDE BRONNEN]\n" + SUPPLEMENTARY);
+  if (state.updatesRawText && state.updatesRawText.trim()) {
+    parts.push("\n\n[RECENTE UPDATES — toegevoegd via kennisbank-updates.txt]\n" + state.updatesRawText.trim());
+  }
   if (extra && extra.trim()) parts.push("\n\n[EXTRA INFO TOEGEVOEGD DOOR MEDEWERKER]\n" + extra.trim());
   return parts.join("");
 }
@@ -824,6 +942,19 @@ async function sendChat() {
   state.conversation.push({ role: "user", content: text, timestamp: new Date().toISOString() });
   input.value = "";
   updateSendBtn();
+
+  const apiKey = getApiKey();
+  if (!apiKey) {
+    state.conversation.push({
+      role: "assistant",
+      content: "Geen API-key ingesteld. Klik op het ⚙️ icoon in de header om je Anthropic API-key in te voeren.",
+      timestamp: new Date().toISOString()
+    });
+    renderMessages();
+    persistCurrentConversation();
+    return;
+  }
+
   state.loading = true;
   renderMessages();
   persistCurrentConversation();
@@ -843,6 +974,7 @@ async function sendChat() {
       method: "POST",
       headers: {
         "Content-Type": "application/json",
+        "x-api-key": apiKey,
         "anthropic-version": "2023-06-01",
         "anthropic-dangerous-direct-browser-access": "true"
       },
@@ -860,7 +992,7 @@ async function sendChat() {
     }
   } catch (err) {
     console.error(err);
-    assistantText = "Er ging iets mis bij het ophalen van een antwoord. Controleer je internetverbinding en probeer opnieuw.\n\n(" + (err.message || err) + ")";
+    assistantText = "Er ging iets mis bij het ophalen van een antwoord. Controleer je internetverbinding en API-key, en probeer opnieuw.\n\n(" + (err.message || err) + ")";
   }
   state.conversation.push({ role: "assistant", content: assistantText, timestamp: new Date().toISOString() });
   state.loading = false;
@@ -877,7 +1009,6 @@ function updateSendBtn() {
 
 function exportLogsCsv() {
   const convs = loadConversations();
-  // Include the current conversation even if it hasn't been persisted yet
   if (state.conversation.length > 0 && !convs.some(c => c.id === currentConvId)) {
     convs.push({ id: currentConvId, startTime: new Date().toISOString(), messages: state.conversation });
   }
@@ -911,12 +1042,31 @@ function updateKbCount() {
   $("#kbCount").textContent = count > 0 ? (count + " actieve kennisblok" + (count === 1 ? "" : "ken")) : "";
 }
 
+// ===== Modal (API key) =====
+function openApiModal() {
+  $("#apiKeyInput").value = getApiKey();
+  refreshApiStatus();
+  $("#apiModalBackdrop").classList.add("open");
+}
+function closeApiModal() { $("#apiModalBackdrop").classList.remove("open"); }
+function refreshApiStatus() {
+  const status = $("#apiStatus");
+  if (getApiKey()) {
+    status.className = "api-status ok";
+    status.textContent = "✅ API key actief";
+  } else {
+    status.className = "api-status no";
+    status.textContent = "❌ Geen API key ingesteld";
+  }
+}
+{{/IF_DEMO}}
+
 // ===== Event wiring =====
 function init() {
+  rebuildSearchIndex();
   renderSidebar();
   renderMain();
-  renderMessages();
-  updateSendBtn();
+  loadUpdates();
 
   $("#hamburger").addEventListener("click", () => {
     state.sidebarCollapsed = !state.sidebarCollapsed;
@@ -940,6 +1090,10 @@ function init() {
     searchInput.value = ""; state.searchQuery = "";
     searchClear.style.display = "none"; renderMain(); searchInput.focus();
   });
+
+  {{IF_DEMO}}
+  renderMessages();
+  updateSendBtn();
 
   $("#fab").addEventListener("click", () => {
     $("#chatPanel").classList.add("open");
@@ -979,9 +1133,27 @@ function init() {
     }
   });
   $("#extraKbInput").addEventListener("input", updateKbCount);
-  document.addEventListener("keydown", (e) => {
-    if (e.key === "Escape" && $("#modalBackdrop").classList.contains("open")) closeModal();
+
+  $("#openApiModalBtn").addEventListener("click", openApiModal);
+  $("#closeApiModalBtn").addEventListener("click", closeApiModal);
+  $("#apiModalBackdrop").addEventListener("click", (e) => { if (e.target === $("#apiModalBackdrop")) closeApiModal(); });
+  $("#saveApiBtn").addEventListener("click", () => {
+    setApiKey($("#apiKeyInput").value.trim());
+    refreshApiStatus();
   });
+  $("#clearApiBtn").addEventListener("click", () => {
+    if (confirm("API-key verwijderen?")) {
+      clearApiKey(); $("#apiKeyInput").value = ""; refreshApiStatus();
+    }
+  });
+
+  document.addEventListener("keydown", (e) => {
+    if (e.key === "Escape") {
+      if ($("#modalBackdrop").classList.contains("open")) closeModal();
+      if ($("#apiModalBackdrop").classList.contains("open")) closeApiModal();
+    }
+  });
+  {{/IF_DEMO}}
 }
 
 document.addEventListener("DOMContentLoaded", init);
@@ -990,10 +1162,24 @@ document.addEventListener("DOMContentLoaded", init);
 </html>
 """
 
-# Substitute placeholders. Use replace (not format) to avoid {} issues in CSS/JS.
-out = HTML.replace("__MODULES_JSON__", MODULES_JSON)
-out = out.replace("__SUPPLEMENTARY_JSON__", SUPPLEMENTARY_JSON)
-out = out.replace("__SYSTEM_PROMPT__", json.dumps(SYSTEM_PROMPT, ensure_ascii=False))
+IF_DEMO_RE = re.compile(r"\{\{IF_DEMO\}\}(.*?)\{\{/IF_DEMO\}\}", re.DOTALL)
 
-Path("Kwandoo_Kennisbank_v2.html").write_text(out, encoding="utf-8")
-print(f"Wrote Kwandoo_Kennisbank_v2.html ({len(out):,} bytes)")
+
+def render(template: str, is_demo: bool) -> str:
+    if is_demo:
+        out = IF_DEMO_RE.sub(lambda m: m.group(1), template)
+    else:
+        out = IF_DEMO_RE.sub("", template)
+    out = out.replace("__MODULES_JSON__", MODULES_JSON)
+    out = out.replace("__IS_DEMO__", "true" if is_demo else "false")
+    out = out.replace("__SUPPLEMENTARY_JSON__", SUPPLEMENTARY_JSON)
+    out = out.replace("__SYSTEM_PROMPT__", json.dumps(SYSTEM_PROMPT, ensure_ascii=False))
+    return out
+
+
+prod = render(TEMPLATE, is_demo=False)
+demo = render(TEMPLATE, is_demo=True)
+Path("Kwandoo_Kennisbank_v2.html").write_text(prod, encoding="utf-8")
+Path("Kwandoo_Kennisbank_v2_DEMO.html").write_text(demo, encoding="utf-8")
+print(f"Production: Kwandoo_Kennisbank_v2.html ({len(prod):,} bytes)")
+print(f"Demo:       Kwandoo_Kennisbank_v2_DEMO.html ({len(demo):,} bytes)")
