@@ -5,6 +5,7 @@ Kwandoo_Kennisbank_v2_DEMO.html (demo, with chatbot + API key modal).
 Both versions share the same styling, content rendering and updates loader.
 The differences are gated by simple {{IF_DEMO}} ... {{/IF_DEMO}} blocks below.
 """
+import base64
 import json
 import re
 from pathlib import Path
@@ -12,6 +13,15 @@ from pathlib import Path
 data = json.loads(Path("modules.json").read_text(encoding="utf-8"))
 MODULES_JSON = json.dumps(data["modules"], ensure_ascii=False)
 SUPPLEMENTARY_JSON = json.dumps(data["supplementary"], ensure_ascii=False)
+
+# Read every PNG sitting next to the builder and encode it as a data URI so the
+# screenshots can be embedded inline.
+IMAGES = {}
+for png in sorted(Path(".").glob("*.png")):
+    b64 = base64.b64encode(png.read_bytes()).decode("ascii")
+    IMAGES[png.name] = f"data:image/png;base64,{b64}"
+IMAGES_JSON = json.dumps(IMAGES, ensure_ascii=False)
+print(f"Embedded {len(IMAGES)} PNG screenshots ({sum(len(v) for v in IMAGES.values()):,} bytes of data URIs)")
 
 SYSTEM_PROMPT = """Je bent een behulpzame interne assistent voor medewerkers van de Dienst Vrije Tijd van gemeente Ingelmunster. Je helpt hen met het gebruik van Kwandoo, het online inschrijvingssysteem voor speelpleinwerking, opvang, sportkampen en uitstappen.
 
@@ -255,6 +265,23 @@ body {
 
 .para { margin: 4px 0; }
 .spacer { height: 6px; }
+
+/* Numbered + bullet lists */
+.kb-list { margin: 6px 0 6px 0; padding-left: 26px; }
+.kb-list li { margin: 2px 0; line-height: 1.5; }
+
+/* Subheading inside section body */
+.kb-subhead { display: block; margin-top: 12px; margin-bottom: 4px; font-weight: 800; color: #1A237E; }
+
+/* Inline screenshot */
+.kb-img { max-width: 100%; border-radius: 8px; border: 1px solid #E8EAED; margin: 12px 0; box-shadow: 0 2px 8px rgba(0,0,0,0.08); display: block; }
+
+/* Proper styled table */
+.kb-table { width: 100%; border-collapse: separate; border-spacing: 0; margin: 12px 0; border: 1px solid #E8EAED; border-radius: 8px; overflow: hidden; font-size: 13.2px; }
+.kb-table th { background: #2D6A4F; color: #fff; font-weight: 800; text-align: left; padding: 8px 12px; }
+.kb-table td { padding: 8px 12px; border-top: 1px solid #E8EAED; vertical-align: top; }
+.kb-table tbody tr:nth-child(odd) td { background: #FFFFFF; }
+.kb-table tbody tr:nth-child(even) td { background: #F2F3F4; }
 
 mark.hl { background: #fff2a8; padding: 0 2px; border-radius: 2px; }
 
@@ -545,6 +572,7 @@ mark.hl { background: #fff2a8; padding: 0 2px; border-radius: 2px; }
 <script>
 "use strict";
 const MODULES = __MODULES_JSON__;
+const IMAGES = __IMAGES_JSON__;
 const IS_DEMO = __IS_DEMO__;
 {{IF_DEMO}}
 const SUPPLEMENTARY = __SUPPLEMENTARY_JSON__;
@@ -600,8 +628,18 @@ function allModules() {
 function getModule(id) { return allModules().find(m => m.id === id) || MODULES[0]; }
 
 // ===== Content rendering =====
-// Renders a section's content as HTML, handling 🔴 ⚠️ ✅ blocks, numbered steps,
-// bullet points and blank-line spacers.
+// Renders a section's content as HTML. Handles:
+//  - 🔴 ⚠️ ✅ note blocks
+//  - @@TABLE@@<json>  → styled <table>
+//  - @@IMG@@<filename>@@ → inline <img> from IMAGES
+//  - Subheadings matching X.Y Title pattern
+//  - Consecutive numbered lines grouped into a single <ol>
+//  - Consecutive bullet lines grouped into a single <ul>
+//  - Blank lines → 6px spacers
+function isStep(line)    { return /^\d+\.\s/.test(line) && line.length < 250; }
+function isBullet(line)  { return /^[•\-\*]\s/.test(line); }
+function isSubhead(line) { return /^\d+\.\d+\s+\S/.test(line) && line.length < 120; }
+
 function renderContent(text) {
   if (!text) return "";
   const lines = text.split(/\r?\n/);
@@ -615,6 +653,38 @@ function renderContent(text) {
       i++;
       continue;
     }
+    // Table marker
+    if (line.startsWith("@@TABLE@@")) {
+      try {
+        const data = JSON.parse(line.slice("@@TABLE@@".length));
+        const headers = data[0] || [];
+        const rows = data.slice(1);
+        let html = '<table class="kb-table"><thead><tr>';
+        for (const h of headers) html += "<th>" + escHtml(h) + "</th>";
+        html += "</tr></thead><tbody>";
+        for (const r of rows) {
+          html += "<tr>";
+          for (let c = 0; c < headers.length; c++) html += "<td>" + escHtml(r[c] || "") + "</td>";
+          html += "</tr>";
+        }
+        html += "</tbody></table>";
+        out.push(html);
+      } catch (e) {
+        out.push('<div class="para">' + escHtml(line) + "</div>");
+      }
+      i++; continue;
+    }
+    // Image marker
+    const imgMatch = line.match(/^@@IMG@@(.+?)@@$/);
+    if (imgMatch) {
+      const fname = imgMatch[1];
+      const src = IMAGES[fname];
+      if (src) {
+        out.push('<img class="kb-img" src="' + src + '" alt="' + escHtml(fname) + '">');
+      }
+      i++; continue;
+    }
+    // Note blocks
     if (line.startsWith("🔴")) {
       out.push('<div class="note red">' + escHtml(line.replace(/^🔴\s*/, "🔴 ")) + "</div>");
       i++; continue;
@@ -627,18 +697,33 @@ function renderContent(text) {
       out.push('<div class="note green">' + escHtml(line.replace(/^✅\s*/, "✅ ")) + "</div>");
       i++; continue;
     }
-    if (/^\d+\.\s/.test(line) && line.length < 250) {
-      out.push('<div class="step">' + escHtml(line) + "</div>");
+    // Subheading (X.Y Title) — must check before isStep, since "5.1" also
+    // matches the numbered step pattern.
+    if (isSubhead(line)) {
+      out.push('<strong class="kb-subhead">' + escHtml(line) + "</strong>");
       i++; continue;
     }
-    if (/^[•\-\*]\s/.test(line)) {
-      out.push('<div class="bullet">' + escHtml(line.replace(/^[•\-\*]\s+/, "")) + "</div>");
-      i++; continue;
+    // Consecutive numbered steps → <ol>
+    if (isStep(line)) {
+      const items = [];
+      while (i < lines.length && isStep(lines[i].trim()) && !isSubhead(lines[i].trim())) {
+        items.push(lines[i].trim().replace(/^\d+\.\s+/, ""));
+        i++;
+      }
+      out.push('<ol class="kb-list">' + items.map(t => "<li>" + escHtml(t) + "</li>").join("") + "</ol>");
+      continue;
     }
-    if (/^\d+\.\d+\b/.test(line) && line.length < 100) {
-      out.push('<div class="para" style="font-weight:800;color:#1A237E;margin-top:10px">' + escHtml(line) + "</div>");
-      i++; continue;
+    // Consecutive bullets → <ul>
+    if (isBullet(line)) {
+      const items = [];
+      while (i < lines.length && isBullet(lines[i].trim())) {
+        items.push(lines[i].trim().replace(/^[•\-\*]\s+/, ""));
+        i++;
+      }
+      out.push('<ul class="kb-list">' + items.map(t => "<li>" + escHtml(t) + "</li>").join("") + "</ul>");
+      continue;
     }
+    // Plain paragraph
     out.push('<div class="para">' + escHtml(line) + "</div>");
     i++;
   }
@@ -1171,6 +1256,7 @@ def render(template: str, is_demo: bool) -> str:
     else:
         out = IF_DEMO_RE.sub("", template)
     out = out.replace("__MODULES_JSON__", MODULES_JSON)
+    out = out.replace("__IMAGES_JSON__", IMAGES_JSON)
     out = out.replace("__IS_DEMO__", "true" if is_demo else "false")
     out = out.replace("__SUPPLEMENTARY_JSON__", SUPPLEMENTARY_JSON)
     out = out.replace("__SYSTEM_PROMPT__", json.dumps(SYSTEM_PROMPT, ensure_ascii=False))
