@@ -123,6 +123,28 @@ body {
   color: #5f6368; padding: 4px 8px;
 }
 
+/* ===== Search suggestions dropdown ===== */
+.search-suggest {
+  position: absolute; top: 44px; left: 0; right: 0;
+  background: #fff; color: #202124;
+  border: 1px solid #E8EAED; border-radius: 10px;
+  box-shadow: 0 6px 24px rgba(0,0,0,0.18);
+  z-index: 60; overflow: hidden;
+  display: none;
+}
+.search-suggest.open { display: block; }
+.suggest-item {
+  display: flex; align-items: center; gap: 10px;
+  padding: 9px 14px; cursor: pointer;
+  border-bottom: 1px solid #F1F3F4;
+  font-size: 13.5px;
+}
+.suggest-item:last-child { border-bottom: none; }
+.suggest-item:hover, .suggest-item.focused { background: #F0FAF3; }
+.suggest-item .s-icon { font-size: 14px; flex-shrink: 0; }
+.suggest-item .s-title { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.suggest-item .s-tag { color: #5f6368; font-size: 11.5px; white-space: nowrap; flex-shrink: 0; }
+
 .add-kb-btn, .gear-btn {
   height: 38px; padding: 0 14px; background: rgba(255,255,255,0.15);
   border: 1px solid rgba(255,255,255,0.3); color: #fff; border-radius: 8px;
@@ -503,6 +525,7 @@ mark.hl { background: #fff2a8; padding: 0 2px; border-radius: 2px; }
     <span class="search-icon">🔍</span>
     <input id="searchInput" class="search-input" type="text" placeholder="Zoek in de kennisbank…" autocomplete="off">
     <button id="searchClear" class="search-clear" style="display:none">×</button>
+    <div id="searchSuggest" class="search-suggest" role="listbox"></div>
   </div>
   {{IF_DEMO}}<button class="add-kb-btn" id="openModalBtn">＋ Kennisbank</button>
   <button class="gear-btn" id="openApiModalBtn" aria-label="API Instellingen" title="API Instellingen">⚙️</button>{{/IF_DEMO}}
@@ -838,19 +861,173 @@ function renderMain() {
 }
 
 // ===== Search =====
+// Synonym groups: typing any term expands the search to include every other
+// term in the group. Cuts across module boundaries on purpose so that
+// "rekening" still surfaces facturatie content, "inloggen" surfaces
+// klantenzone content, etc.
+const SYNONYM_GROUPS = [
+  ["inloggen", "aanmelden", "login", "account", "klantenzone", "wachtwoord", "paswoord"],
+  ["rekening", "betaling", "factuur", "afrekening", "facturatie"],
+  ["kind", "leerling", "deelnemer", "kindbeheer"],
+  ["mail", "email", "e-mail", "bericht", "communicatie", "mailing"],
+  ["fout", "probleem", "error", "werkt niet", "faq"],
+  ["opvang", "tijdregistratie", "tijdsregistratie", "klok"],
+  ["rapport", "overzicht", "export", "download", "rapportering"],
+  ["rol", "rechten", "toegang", "permissie", "gebruiker"],
+  ["boete", "straf", "annulatie", "annulering"],
+];
+const SYNONYM_MAP = {};
+for (const g of SYNONYM_GROUPS) {
+  for (const w of g) SYNONYM_MAP[w] = g.filter(x => x !== w);
+}
+function getSynonyms(query) {
+  return SYNONYM_MAP[query.toLowerCase().trim()] || [];
+}
+
+// Levenshtein with early-exit: bail once min cost in the current row exceeds
+// the threshold, so long-document scans stay cheap.
+function levenshtein(a, b, threshold) {
+  if (a === b) return 0;
+  if (Math.abs(a.length - b.length) > threshold) return threshold + 1;
+  const la = a.length, lb = b.length;
+  if (la === 0) return lb;
+  if (lb === 0) return la;
+  let prev = new Array(lb + 1);
+  for (let j = 0; j <= lb; j++) prev[j] = j;
+  for (let i = 1; i <= la; i++) {
+    const curr = new Array(lb + 1);
+    curr[0] = i;
+    let rowMin = i;
+    for (let j = 1; j <= lb; j++) {
+      const cost = a.charCodeAt(i - 1) === b.charCodeAt(j - 1) ? 0 : 1;
+      curr[j] = Math.min(curr[j - 1] + 1, prev[j] + 1, prev[j - 1] + cost);
+      if (curr[j] < rowMin) rowMin = curr[j];
+    }
+    if (rowMin > threshold) return threshold + 1;
+    prev = curr;
+  }
+  return prev[lb];
+}
+
+// Tokenise a text into searchable lowercase words (length ≥ 3).
+function tokenize(text) {
+  return text.toLowerCase().split(/[^a-zà-ÿ0-9]+/i).filter(w => w.length >= 3);
+}
+
+// Returns true if any word in `text` is within edit distance 2 of `query`
+// (only fuzzy-matches when the query itself has more than 5 chars). The
+// inner levenshtein call early-exits when the length gap exceeds 2, so the
+// scan stays cheap even for long word lists.
+function fuzzyWordMatch(query, words) {
+  if (query.length <= 5) return false;
+  for (const w of words) {
+    if (Math.abs(w.length - query.length) > 2) continue;
+    if (levenshtein(query, w, 2) <= 2) return true;
+  }
+  return false;
+}
+
 let SEARCH_INDEX = [];
 function rebuildSearchIndex() {
   SEARCH_INDEX = [];
   for (const m of allModules()) {
     for (const s of m.sections) {
-      SEARCH_INDEX.push({ module: m, section: s, hay: (s.title + "\n" + s.content).toLowerCase() });
+      const titleLower = s.title.toLowerCase();
+      const contentLower = s.content.toLowerCase();
+      SEARCH_INDEX.push({
+        module: m,
+        section: s,
+        titleLower,
+        contentLower,
+        titleWords: tokenize(s.title),
+        contentWords: tokenize(s.content),
+      });
     }
   }
 }
 
+// Score a single section against the query. Returns { score, matched } or null.
+// Priority bands:
+//   1000 — exact substring in title
+//    700 — synonym substring in title
+//    500 — fuzzy match (edit dist ≤2) on a title word
+//    300 — exact substring in content
+//    200 — synonym substring in content
+//    100 — fuzzy match on a content word
+function scoreSection(it, query, synonyms) {
+  const q = query.toLowerCase().trim();
+  if (!q) return null;
+  if (it.titleLower.includes(q)) return { score: 1000, matched: q };
+  for (const s of synonyms) {
+    if (it.titleLower.includes(s)) return { score: 700, matched: s };
+  }
+  if (fuzzyWordMatch(q, it.titleWords)) return { score: 500, matched: q };
+  if (it.contentLower.includes(q)) return { score: 300, matched: q };
+  for (const s of synonyms) {
+    if (it.contentLower.includes(s)) return { score: 200, matched: s };
+  }
+  if (fuzzyWordMatch(q, it.contentWords)) return { score: 100, matched: q };
+  return null;
+}
+
+function runSearch(query) {
+  const synonyms = getSynonyms(query);
+  const out = [];
+  for (const it of SEARCH_INDEX) {
+    const m = scoreSection(it, query, synonyms);
+    if (m) out.push({ ...it, score: m.score, matched: m.matched });
+  }
+  out.sort((a, b) => b.score - a.score);
+  return out;
+}
+
+function buildSuggestions(query) {
+  if (!query || query.length < 2) return [];
+  const synonyms = getSynonyms(query);
+  const q = query.toLowerCase().trim();
+  const ranked = [];
+  for (const it of SEARCH_INDEX) {
+    let score = 0;
+    let matched = q;
+    if (it.titleLower.includes(q)) score = 1000;
+    else if (synonyms.some(s => it.titleLower.includes(s))) {
+      score = 700; matched = synonyms.find(s => it.titleLower.includes(s));
+    } else if (fuzzyWordMatch(q, it.titleWords)) score = 500;
+    if (score > 0) ranked.push({ it, score, matched });
+  }
+  ranked.sort((a, b) => b.score - a.score);
+  return ranked.slice(0, 5);
+}
+
+function renderSuggestions() {
+  const box = $("#searchSuggest");
+  if (!box) return;
+  const q = $("#searchInput").value.trim();
+  if (q.length < 2) { box.classList.remove("open"); box.innerHTML = ""; return; }
+  const sug = buildSuggestions(q);
+  if (sug.length === 0) { box.classList.remove("open"); box.innerHTML = ""; return; }
+  box.innerHTML = sug.map(({ it }) =>
+    '<div class="suggest-item" data-mod="' + escHtml(it.module.id) + '" data-sec="' + escHtml(it.section.id) + '">' +
+      '<span class="s-icon">' + escHtml(it.module.icon) + '</span>' +
+      '<span class="s-title">' + escHtml(it.section.title) + '</span>' +
+      '<span class="s-tag">' + escHtml(it.module.title) + '</span>' +
+    '</div>'
+  ).join("");
+  box.querySelectorAll(".suggest-item").forEach(div => {
+    div.addEventListener("mousedown", (e) => {
+      e.preventDefault();
+      box.classList.remove("open");
+      $("#searchInput").value = "";
+      state.searchQuery = "";
+      $("#searchClear").style.display = "none";
+      selectSection(div.getAttribute("data-mod"), div.getAttribute("data-sec"));
+    });
+  });
+  box.classList.add("open");
+}
+
 function renderSearchResults(root) {
-  const q = state.searchQuery.toLowerCase();
-  const matches = SEARCH_INDEX.filter(it => it.hay.includes(q));
+  const matches = runSearch(state.searchQuery);
   root.appendChild(el("div", { class: "results-head" }, matches.length + ' resultaten voor "' + state.searchQuery + '"'));
   if (matches.length === 0) {
     const empty = el("div", { class: "empty-state" });
@@ -859,26 +1036,48 @@ function renderSearchResults(root) {
     return;
   }
   for (const it of matches) {
+    // Build preview around the first occurrence of the matched term (which
+    // may be the original query or a synonym).
+    const needle = (it.matched || state.searchQuery).toLowerCase();
     const lower = it.section.content.toLowerCase();
-    let pos = lower.indexOf(q);
+    let pos = lower.indexOf(needle);
     if (pos < 0) pos = 0;
-    let start = Math.max(0, pos - 40);
+    const start = Math.max(0, pos - 40);
     const preview = (start > 0 ? "… " : "") + it.section.content.slice(start, start + 220);
     const card = el("div", { class: "result-card", onclick: () => {
       state.searchQuery = "";
       $("#searchInput").value = "";
       $("#searchClear").style.display = "none";
+      $("#searchSuggest").classList.remove("open");
       selectSection(it.module.id, it.section.id);
     }});
+    // Highlight both the original query and the matched synonym (if different)
+    const titleHl = highlightExtra(it.section.title, it.matched, state.searchQuery);
+    const previewHl = highlightExtra(preview, it.matched, state.searchQuery);
     card.innerHTML =
       '<div class="result-meta">' +
         '<span class="result-emoji">' + escHtml(it.module.icon) + "</span>" +
         '<span class="result-tag">' + escHtml(it.module.title) + "</span>" +
       "</div>" +
-      '<div class="result-title">' + highlight(it.section.title, state.searchQuery) + "</div>" +
-      '<div class="result-preview">' + highlight(preview, state.searchQuery) + "</div>";
+      '<div class="result-title">' + titleHl + "</div>" +
+      '<div class="result-preview">' + previewHl + "</div>";
     root.appendChild(card);
   }
+}
+
+// Wraps the matched and queried terms in pre-escaped <mark> tags. Returns
+// already-escaped HTML; pass through highlight() with an empty query to
+// avoid a second pass.
+function highlightExtra(text, primary, secondary) {
+  let html = escHtml(text);
+  const terms = [];
+  if (primary && primary.length >= 2) terms.push(primary);
+  if (secondary && secondary.length >= 2 && secondary !== primary) terms.push(secondary);
+  for (const t of terms) {
+    const re = new RegExp("(" + t.replace(/[-/\\^$*+?.()|[\]{}]/g, "\\$&") + ")", "gi");
+    html = html.replace(re, '<mark class="hl">$1</mark>');
+  }
+  return html;
 }
 
 // ===== Updates loader =====
@@ -1160,20 +1359,30 @@ function init() {
 
   const searchInput = $("#searchInput");
   const searchClear = $("#searchClear");
+  const searchSuggest = $("#searchSuggest");
   searchInput.addEventListener("input", () => {
     state.searchQuery = searchInput.value.trim();
     searchClear.style.display = state.searchQuery ? "" : "none";
     renderMain();
+    renderSuggestions();
+  });
+  searchInput.addEventListener("focus", () => { renderSuggestions(); });
+  searchInput.addEventListener("blur", () => {
+    setTimeout(() => searchSuggest.classList.remove("open"), 120);
   });
   searchInput.addEventListener("keydown", (e) => {
     if (e.key === "Escape") {
       searchInput.value = ""; state.searchQuery = "";
-      searchClear.style.display = "none"; renderMain();
+      searchClear.style.display = "none";
+      searchSuggest.classList.remove("open");
+      renderMain();
     }
   });
   searchClear.addEventListener("click", () => {
     searchInput.value = ""; state.searchQuery = "";
-    searchClear.style.display = "none"; renderMain(); searchInput.focus();
+    searchClear.style.display = "none";
+    searchSuggest.classList.remove("open");
+    renderMain(); searchInput.focus();
   });
 
   {{IF_DEMO}}
